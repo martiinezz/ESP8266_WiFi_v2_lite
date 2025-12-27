@@ -31,12 +31,16 @@
 #include "app_config.h"
 #include "wifi.h"
 #include "web_server.h"
+#ifndef ENABLE_LITE
 #include "ohm.h"
+#endif
 #include "openevse.h"
 #include "input.h"
+#ifndef ENABLE_LITE
 #include "emoncms.h"
 #include "mqtt.h"
 #include "divert.h"
+#endif
 #include "ota.h"
 #include "lcd.h"
 #include "espal.h"
@@ -106,7 +110,9 @@ loop() {
   ota_loop();
 #endif
   rapiSender.loop();
+#ifndef ENABLE_LITE
   divert_current_loop();
+#endif
 
   if(OpenEVSE.isConnected())
   {
@@ -163,7 +169,9 @@ loop() {
 
   if(wifi_client_connected())
   {
+#ifndef ENABLE_LITE
     mqtt_loop();
+#endif
 
     // -------------------------------------------------------------------
     // Do these things once every 30 seconds
@@ -175,17 +183,22 @@ loop() {
       {
         DynamicJsonDocument data(4096);
         create_rapi_json(data); // create JSON Strings for EmonCMS and MQTT
+#ifndef ENABLE_LITE
         emoncms_publish(data);
+#endif
         event_send(data);
 
+#ifndef ENABLE_LITE
         if(config_ohm_enabled()) {
           ohm_loop();
         }
+#endif
       }
 
       Timer1 = millis();
     }
 
+#ifndef ENABLE_LITE
     if(emoncms_updated)
     {
       // Send the current state to check the config
@@ -194,6 +207,7 @@ loop() {
       emoncms_publish(data);
       emoncms_updated = false;
     }
+#endif
   } // end WiFi connected
 
   Profile_End(loop, 10);
@@ -214,7 +228,9 @@ void event_send(JsonDocument &event)
   DBUGLN("");
   #endif
   web_server_event(event);
+#ifndef ENABLE_LITE
   mqtt_publish(event);
+#endif
 }
 
 void hardware_setup()

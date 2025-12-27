@@ -11,10 +11,14 @@
 #include "web_server_static.h"
 #include "app_config.h"
 #include "wifi.h"
+#ifndef ENABLE_LITE
 #include "mqtt.h"
+#endif
 #include "input.h"
+#ifndef ENABLE_LITE
 #include "emoncms.h"
 #include "divert.h"
+#endif
 #include "lcd.h"
 #include "espal.h"
 
@@ -248,6 +252,7 @@ handleSaveNetwork(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
+#ifndef ENABLE_LITE
 // -------------------------------------------------------------------
 // Save Emoncms
 // url: /saveemoncms
@@ -277,7 +282,9 @@ handleSaveEmoncms(AsyncWebServerRequest *request) {
   response->print(tmpStr);
   request->send(response);
 }
+#endif
 
+#ifndef ENABLE_LITE
 // -------------------------------------------------------------------
 // Save MQTT Config
 // url: /savemqtt
@@ -319,7 +326,9 @@ handleSaveMqtt(AsyncWebServerRequest *request) {
   // If connected disconnect MQTT to trigger re-connect with new details
   mqtt_restart();
 }
+#endif
 
+#ifndef ENABLE_LITE
 // -------------------------------------------------------------------
 // Change divert mode (solar PV divert mode) e.g 1:Normal (default), 2:Eco
 // url: /divertmode
@@ -339,6 +348,7 @@ handleDivertMode(AsyncWebServerRequest *request){
 
   DBUGF("Divert Mode: %d", divertmode);
 }
+#endif
 
 // -------------------------------------------------------------------
 // Save the web site user/pass
@@ -381,6 +391,7 @@ handleSaveAdvanced(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
+#ifndef ENABLE_LITE
 // -------------------------------------------------------------------
 // Save the Ohm keyto EEPROM
 // url: /handleSaveOhmkey
@@ -401,6 +412,7 @@ handleSaveOhmkey(AsyncWebServerRequest *request) {
   response->print("saved");
   request->send(response);
 }
+#endif
 
 // -------------------------------------------------------------------
 // Returns status json
@@ -430,6 +442,7 @@ handleStatus(AsyncWebServerRequest *request) {
   doc["srssi"] = WiFi.RSSI();
   doc["ipaddress"] = ipaddress;
 
+#ifndef ENABLE_LITE
   doc["emoncms_connected"] = (int)emoncms_connected;
   doc["packets_sent"] = packets_sent;
   doc["packets_success"] = packets_success;
@@ -437,6 +450,7 @@ handleStatus(AsyncWebServerRequest *request) {
   doc["mqtt_connected"] = (int)mqtt_connected();
 
   doc["ohm_hour"] = ohm_hour;
+#endif
 
   doc["free_heap"] = ESPAL.getFreeHeap();
 
@@ -471,11 +485,13 @@ handleStatus(AsyncWebServerRequest *request) {
   doc["nogndcount"] = nognd_count;
   doc["stuckcount"] = stuck_count;
 
+#ifndef ENABLE_LITE
   doc["divertmode"] = divertmode;
   doc["solar"] = solar;
   doc["grid_ie"] = grid_ie;
   doc["charge_rate"] = charge_rate;
   doc["divert_update"] = (millis() - lastUpdate) / 1000;
+#endif
 
   doc["ota_update"] = (int)Update.isRunning();
 
@@ -950,19 +966,25 @@ web_server_setup() {
 
   // Handle HTTP web interface button presses
   server.on("/savenetwork", handleSaveNetwork);
+#ifndef ENABLE_LITE
   server.on("/saveemoncms", handleSaveEmoncms);
   server.on("/savemqtt", handleSaveMqtt);
+#endif
   server.on("/saveadmin", handleSaveAdmin);
   server.on("/saveadvanced", handleSaveAdvanced);
+#ifndef ENABLE_LITE
   server.on("/saveohmkey", handleSaveOhmkey);
+#endif
   server.on("/reset", handleRst);
   server.on("/restart", handleRestart);
   server.on("/rapi", handleRapi);
   server.on("/r", handleRapi);
   server.on("/scan", handleScan);
   server.on("/apoff", handleAPOff);
+#ifndef ENABLE_LITE
   server.on("/divertmode", handleDivertMode);
   server.on("/emoncms/describe", handleDescribe);
+#endif
 
   // Simple Firmware Update Form
   server.on("/update", HTTP_GET, handleUpdateGet);
@@ -986,11 +1008,13 @@ web_server_loop() {
     wifi_restart();
 }
 
+#ifndef ENABLE_LITE
   // Do we need to restart MQTT?
   if(mqttRestartTime > 0 && millis() > mqttRestartTime) {
     mqttRestartTime = 0;
     mqtt_restart();
   }
+#endif
 
   // Do we need to turn off the access point?
   if(apOffTime > 0 && millis() > apOffTime) {
