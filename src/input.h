@@ -18,20 +18,12 @@ extern bool temp3_valid;
 extern long pilot;  // OpenEVSE Pilot Setting
 extern long state;    // OpenEVSE State
 extern long elapsed;  // Elapsed time (only valid if charging)
-extern String estate; // Common name for State
 
 //Defaults OpenEVSE Settings
 extern byte rgb_lcd;
 extern byte serial_dbg;
 extern byte auto_service;
 extern int service;
-
-#ifdef ENABLE_LEGACY_API
-extern long current_l1min;
-extern long current_l2min;
-extern long current_l1max;
-extern long current_l2max;
-#endif
 
 extern long current_scale;
 extern long current_offset;
@@ -53,17 +45,9 @@ extern long gfci_count;
 extern long nognd_count;
 extern long stuck_count;
 
-//OpenEVSE Session
-#ifdef ENABLE_LEGACY_API
-extern long kwh_limit;
-extern long time_limit;
-#endif
-
 //OpenEVSE Usage Statistics
 extern long wattsec;
 extern long watthour_total;
-
-extern String ohm_hour;
 
 extern void handleRapiRead();
 extern void update_rapi_values();

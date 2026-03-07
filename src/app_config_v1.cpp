@@ -126,16 +126,6 @@ config_load_v1_settings() {
   EEPROM_read_string(EEPROM_ESID_START, EEPROM_ESID_SIZE, esid);
   EEPROM_read_string(EEPROM_EPASS_START, EEPROM_EPASS_SIZE, epass);
 
-  // EmonCMS settings
-  EEPROM_read_string(EEPROM_EMON_API_KEY_START, EEPROM_EMON_API_KEY_SIZE,
-                     emoncms_apikey);
-  EEPROM_read_string(EEPROM_EMON_SERVER_START, EEPROM_EMON_SERVER_SIZE,
-                     emoncms_server);
-  EEPROM_read_string(EEPROM_EMON_NODE_START, EEPROM_EMON_NODE_SIZE,
-                     emoncms_node);
-  EEPROM_read_string(EEPROM_EMON_FINGERPRINT_START, EEPROM_EMON_FINGERPRINT_SIZE,
-                     emoncms_fingerprint);
-
   // MQTT settings
   EEPROM_read_string(EEPROM_MQTT_SERVER_START, EEPROM_MQTT_SERVER_SIZE,
                      mqtt_server);
@@ -155,12 +145,6 @@ config_load_v1_settings() {
                      www_username);
   EEPROM_read_string(EEPROM_WWW_PASS_START, EEPROM_WWW_PASS_SIZE,
                      www_password);
-  // Web server credentials
-  EEPROM_read_string(EEPROM_HOSTNAME_START, EEPROM_HOSTNAME_SIZE,
-                     esp_hostname);
-
-  // Ohm Connect Settings
-  EEPROM_read_string(EEPROM_OHM_KEY_START, EEPROM_OHM_KEY_SIZE, ohm);
 
   // Flags
   EEPROM_read_uint24(EEPROM_FLAGS_START, flags);

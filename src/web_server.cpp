@@ -4,7 +4,6 @@
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
-//#include <FS.h>                       // SPIFFS file-system: store web server html, CSS etc.
 
 #include "emonesp.h"
 #include "web_server.h"
@@ -13,8 +12,6 @@
 #include "wifi.h"
 #include "mqtt.h"
 #include "input.h"
-#include "emoncms.h"
-#include "divert.h"
 #include "lcd.h"
 #include "espal.h"
 
@@ -132,9 +129,6 @@ bool isPositive(AsyncWebServerRequest *request, const char *param) {
 // -------------------------------------------------------------------
 // Wifi scan /scan not currently used
 // url: /scan
-//
-// First request will return 0 results unless you start scan from somewhere else (loop/setup)
-// Do not request more often than 3-5 seconds
 // -------------------------------------------------------------------
 void
 handleScan(AsyncWebServerRequest *request) {
@@ -169,7 +163,6 @@ handleScan(AsyncWebServerRequest *request) {
   response->print(json);
   request->send(response);
 #else // ENABLE_ASYNC_WIFI_SCAN
-  // Async WiFi scan need the Git version of the ESP8266 core
   if(WIFI_SCAN_RUNNING == WiFi.scanComplete()) {
     response->setCode(500);
     response->setContentType(CONTENT_TYPE_TEXT);
@@ -249,36 +242,6 @@ handleSaveNetwork(AsyncWebServerRequest *request) {
 }
 
 // -------------------------------------------------------------------
-// Save Emoncms
-// url: /saveemoncms
-// -------------------------------------------------------------------
-void
-handleSaveEmoncms(AsyncWebServerRequest *request) {
-  AsyncResponseStream *response;
-  if(false == requestPreProcess(request, response, CONTENT_TYPE_TEXT)) {
-    return;
-  }
-
-  config_save_emoncms(isPositive(request->arg("enable")),
-                      request->arg("server"),
-                      request->arg("node"),
-                      request->arg("apikey"),
-                      request->arg("fingerprint"));
-
-  char tmpStr[200];
-  snprintf(tmpStr, sizeof(tmpStr), "Saved: %s %s %s %s",
-           emoncms_server.c_str(),
-           emoncms_node.c_str(),
-           emoncms_apikey.c_str(),
-           emoncms_fingerprint.c_str());
-  DBUGLN(tmpStr);
-
-  response->setCode(200);
-  response->print(tmpStr);
-  request->send(response);
-}
-
-// -------------------------------------------------------------------
 // Save MQTT Config
 // url: /savemqtt
 // -------------------------------------------------------------------
@@ -318,26 +281,6 @@ handleSaveMqtt(AsyncWebServerRequest *request) {
 
   // If connected disconnect MQTT to trigger re-connect with new details
   mqtt_restart();
-}
-
-// -------------------------------------------------------------------
-// Change divert mode (solar PV divert mode) e.g 1:Normal (default), 2:Eco
-// url: /divertmode
-// -------------------------------------------------------------------
-void
-handleDivertMode(AsyncWebServerRequest *request){
-  AsyncResponseStream *response;
-  if(false == requestPreProcess(request, response, CONTENT_TYPE_TEXT)) {
-    return;
-  }
-
-  divertmode_update(request->arg("divertmode").toInt());
-
-  response->setCode(200);
-  response->print("Divert Mode changed");
-  request->send(response);
-
-  DBUGF("Divert Mode: %d", divertmode);
 }
 
 // -------------------------------------------------------------------
@@ -382,27 +325,6 @@ handleSaveAdvanced(AsyncWebServerRequest *request) {
 }
 
 // -------------------------------------------------------------------
-// Save the Ohm keyto EEPROM
-// url: /handleSaveOhmkey
-// -------------------------------------------------------------------
-void
-handleSaveOhmkey(AsyncWebServerRequest *request) {
-  AsyncResponseStream *response;
-  if(false == requestPreProcess(request, response, CONTENT_TYPE_TEXT)) {
-    return;
-  }
-
-  bool enabled = isPositive(request->arg("enable"));
-  String qohm = request->arg("ohm");
-
-  config_save_ohm(enabled, qohm);
-
-  response->setCode(200);
-  response->print("saved");
-  request->send(response);
-}
-
-// -------------------------------------------------------------------
 // Returns status json
 // url: /status
 // -------------------------------------------------------------------
@@ -416,7 +338,6 @@ handleStatus(AsyncWebServerRequest *request) {
   const size_t capacity = JSON_OBJECT_SIZE(40) + 1024;
   DynamicJsonDocument doc(capacity);
 
-  String s = "{";
   if (wifi_mode_is_sta_only()) {
     doc["mode"] = "STA";
   } else if (wifi_mode_is_ap_only()) {
@@ -430,13 +351,7 @@ handleStatus(AsyncWebServerRequest *request) {
   doc["srssi"] = WiFi.RSSI();
   doc["ipaddress"] = ipaddress;
 
-  doc["emoncms_connected"] = (int)emoncms_connected;
-  doc["packets_sent"] = packets_sent;
-  doc["packets_success"] = packets_success;
-
   doc["mqtt_connected"] = (int)mqtt_connected();
-
-  doc["ohm_hour"] = ohm_hour;
 
   doc["free_heap"] = ESPAL.getFreeHeap();
 
@@ -471,19 +386,7 @@ handleStatus(AsyncWebServerRequest *request) {
   doc["nogndcount"] = nognd_count;
   doc["stuckcount"] = stuck_count;
 
-  doc["divertmode"] = divertmode;
-  doc["solar"] = solar;
-  doc["grid_ie"] = grid_ie;
-  doc["charge_rate"] = charge_rate;
-  doc["divert_update"] = (millis() - lastUpdate) / 1000;
-
   doc["ota_update"] = (int)Update.isRunning();
-
-
-
-  DBUGVAR(lastUpdate);
-  DBUGVAR(millis());
-  DBUGVAR((millis() - lastUpdate) / 1000);
 
   response->setCode(200);
   serializeJson(doc, *response);
@@ -557,44 +460,6 @@ handleConfigPost(AsyncWebServerRequest *request)
   request->send(response);
 }
 
-#ifdef ENABLE_LEGACY_API
-// -------------------------------------------------------------------
-// Returns Updates JSON
-// url: /rapiupdate
-// -------------------------------------------------------------------
-void
-handleUpdate(AsyncWebServerRequest *request) {
-
-  AsyncResponseStream *response;
-  if(false == requestPreProcess(request, response)) {
-    return;
-  }
-
-  String s = "{";
-  s += "\"comm_sent\":" + String(comm_sent) + ",";
-  s += "\"comm_success\":" + String(comm_success) + ",";
-  s += "\"ohmhour\":\"" + ohm_hour + "\",";
-  s += "\"espfree\":\"" + String(espfree) + "\",";
-  s += "\"packets_sent\":\"" + String(packets_sent) + "\",";
-  s += "\"packets_success\":\"" + String(packets_success) + "\",";
-  s += "\"amp\":" + amp + ",";
-  s += "\"pilot\":" + pilot + ",";
-  s += "\"temp1\":" + temp1 + ",";
-  s += "\"temp2\":" + temp2 + ",";
-  s += "\"temp3\":" + temp3 + ",";
-  s += "\"state\":" + String(state) + ",";
-  s += "\"elapsed\":" + String(elapsed) + ",";
-  s += "\"estate\":\"" + estate + "\",";
-  s += "\"wattsec\":" + wattsec + ",";
-  s += "\"watthour\":" + watthour_total;
-  s += "}";
-
-  response->setCode(200);
-  response->print(s);
-  request->send(response);
-}
-#endif
-
 // -------------------------------------------------------------------
 // Reset config and reboot
 // url: /reset
@@ -633,18 +498,6 @@ handleRestart(AsyncWebServerRequest *request) {
   request->send(response);
 
   systemRestartTime = millis() + 1000;
-}
-
-
-// -------------------------------------------------------------------
-// Emoncms describe end point,
-// Allows local device discover using https://github.com/emoncms/find
-// url: //emoncms/describe
-// -------------------------------------------------------------------
-void handleDescribe(AsyncWebServerRequest *request) {
-  AsyncWebServerResponse *response = request->beginResponse(200, CONTENT_TYPE_TEXT, "openevse");
-  response->addHeader("Access-Control-Allow-Origin", "*");
-  request->send(response);
 }
 
 // -------------------------------------------------------------------
@@ -692,17 +545,13 @@ handleUpdateUpload(AsyncWebServerRequest *request, String filename, size_t index
 
     DBUGF("Update Start: %s", filename.c_str());
 
-    DBUGVAR(data[0]);
-    //int command = data[0] == 0xE9 ? U_FLASH : U_SPIFFS;
     int command = U_FLASH;
-    size_t updateSize = U_FLASH == command ?
-      (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000 :
-      ((size_t) &_SPIFFS_end - (size_t) &_SPIFFS_start);
+    size_t updateSize = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
 
     DBUGVAR(command);
     DBUGVAR(updateSize);
 
-    lcd_display(U_FLASH == command ? F("Updating WiFi") : F("Updating SPIFFS"), 0, 0, 0, LCD_CLEAR_LINE);
+    lcd_display(F("Updating WiFi"), 0, 0, 0, LCD_CLEAR_LINE);
     lcd_display(F(""), 0, 1, 10 * 1000, LCD_CLEAR_LINE);
     lcd_loop();
 
@@ -716,14 +565,10 @@ handleUpdateUpload(AsyncWebServerRequest *request, String filename, size_t index
   if(!Update.hasError())
   {
     DBUGF("Update Writing %d", index);
-    String text = String(index);
     size_t contentLength = request->contentLength();
-    DBUGVAR(contentLength);
     if(contentLength > 0)
     {
       int percent = index / (contentLength / 100);
-      DBUGVAR(percent);
-      DBUGVAR(lastPercent);
       if(percent != lastPercent) {
         String text = String(percent) + F("%");
         lcd_display(text, 0, 1, 10 * 1000, LCD_DISPLAY_NOW);
@@ -750,27 +595,19 @@ handleUpdateUpload(AsyncWebServerRequest *request, String filename, size_t index
   }
 }
 
-String delayTimer = "0 0 0 0";
-
 void
 handleRapi(AsyncWebServerRequest *request) {
   bool json = isPositive(request, "json");
-
   int code = 200;
-
   AsyncResponseStream *response;
   if(false == requestPreProcess(request, response, json ? CONTENT_TYPE_JSON : CONTENT_TYPE_HTML)) {
     return;
   }
 
   String s;
-
   if(false == json) {
     s = F("<html><font size='20'><font color=006666>Open</font><b>EVSE</b></font><p>"
-          "<b>Open Source Hardware</b><p>RAPI Command Sent<p>Common Commands:<p>"
-          "Set Current - $SC XX<p>Set Service Level - $SL 1 - $SL 2 - $SL A<p>"
-          "Get Real-time Current - $GG<p>Get Temperatures - $GP<p>"
-          "<p>"
+          "<b>Open Source Hardware</b><p>RAPI Command Sent<p>"
           "<form method='get' action='r'><label><b><i>RAPI Command:</b></i></label>"
           "<input id='rapi' name='rapi' length=32><p><input type='submit'></form>");
   }
@@ -778,46 +615,12 @@ handleRapi(AsyncWebServerRequest *request) {
   if (request->hasArg("rapi"))
   {
     String rapi = request->arg("rapi");
-
-    // BUG: Really we should do this in the main loop not here...
     RAPI_PORT.flush();
-    DBUGVAR(rapi);
     int ret = rapiSender.sendCmdSync(rapi);
-    DBUGVAR(ret);
 
-    if(RAPI_RESPONSE_OK == ret ||
-       RAPI_RESPONSE_NK == ret)
+    if(RAPI_RESPONSE_OK == ret || RAPI_RESPONSE_NK == ret)
     {
       String rapiString = rapiSender.getResponse();
-
-      // Fake $GD if not supported by firmware
-      if(RAPI_RESPONSE_OK == ret && rapi.startsWith(F("$ST"))) {
-        delayTimer = rapi.substring(4);
-      }
-      if(RAPI_RESPONSE_NK == ret)
-      {
-        if(rapi.equals(F("$GD"))) {
-          ret = 0;
-          rapiString = F("$OK ");
-          rapiString += delayTimer;
-        }
-        else if (rapi.startsWith(F("$FF")))
-        {
-          DBUGF("Attempting legacy FF support");
-
-          String fallback = F("$S");
-          fallback += rapi.substring(4);
-
-          DBUGF("Attempting %s", fallback.c_str());
-
-          int ret = rapiSender.sendCmdSync(fallback.c_str());
-          if(RAPI_RESPONSE_OK == ret)
-          {
-            String rapiString = rapiSender.getResponse();
-          }
-        }
-      }
-
       if (json) {
         s = "{\"cmd\":\""+rapi+"\",\"ret\":\""+rapiString+"\"}";
       } else {
@@ -826,21 +629,9 @@ handleRapi(AsyncWebServerRequest *request) {
         s += rapiString;
       }
     }
-      else
+    else
     {
-      String errorString =
-        RAPI_RESPONSE_QUEUE_FULL == ret ? F("RAPI_RESPONSE_QUEUE_FULL") :
-        RAPI_RESPONSE_BUFFER_OVERFLOW == ret ? F("RAPI_RESPONSE_BUFFER_OVERFLOW") :
-        RAPI_RESPONSE_TIMEOUT == ret ? F("RAPI_RESPONSE_TIMEOUT") :
-        RAPI_RESPONSE_OK == ret ? F("RAPI_RESPONSE_OK") :
-        RAPI_RESPONSE_NK == ret ? F("RAPI_RESPONSE_NK") :
-        RAPI_RESPONSE_INVALID_RESPONSE == ret ? F("RAPI_RESPONSE_INVALID_RESPONSE") :
-        RAPI_RESPONSE_CMD_TOO_LONG == ret ? F("RAPI_RESPONSE_CMD_TOO_LONG") :
-        RAPI_RESPONSE_BAD_CHECKSUM == ret ? F("RAPI_RESPONSE_BAD_CHECKSUM") :
-        RAPI_RESPONSE_BAD_SEQUENCE_ID == ret ? F("RAPI_RESPONSE_BAD_SEQUENCE_ID") :
-        RAPI_RESPONSE_ASYNC_EVENT == ret ? F("RAPI_RESPONSE_ASYNC_EVENT") :
-        F("UNKNOWN");
-
+      String errorString = F("ERROR");
       if (json) {
         s = "{\"cmd\":\""+rapi+"\",\"error\":\""+errorString+"\"}";
       } else {
@@ -848,10 +639,9 @@ handleRapi(AsyncWebServerRequest *request) {
         s += F("<p><strong>Error:</strong>");
         s += errorString;
       }
-
       code = 500;
     }
-}
+  }
   if (false == json) {
     s += F("<script type='text/javascript'>document.getElementById('rapi').focus();</script>");
     s += F("<p></html>\r\n\r\n");
@@ -862,22 +652,45 @@ handleRapi(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
+void
+handleTime(AsyncWebServerRequest *request) {
+  AsyncResponseStream *response;
+  if(false == requestPreProcess(request, response, CONTENT_TYPE_JSON)) {
+    return;
+  }
+
+  if (request->hasArg("epoch")) {
+    uint32_t epoch = request->arg("epoch").toInt();
+    struct timeval set_time = { (time_t)epoch, 0 };
+    settimeofday(&set_time, NULL);
+
+    // Sync to OpenEVSE
+    struct tm *timeinfo = localtime((time_t*)&epoch);
+    char tmpStr[50];
+    // $ST YY MM DD hh mm ss
+    snprintf(tmpStr, sizeof(tmpStr), "$ST %02d %02d %02d %02d %02d %02d",
+             timeinfo->tm_year % 100, timeinfo->tm_mon + 1, timeinfo->tm_mday,
+             timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+    rapiSender.sendCmd(tmpStr);
+
+    response->setCode(200);
+    response->print("{\"msg\":\"OK\",\"time\":\"" + String(ctime((time_t*)&epoch)) + "\"}");
+  } else {
+    response->setCode(400);
+    response->print("{\"msg\":\"Missing epoch\"}");
+  }
+  request->send(response);
+}
+
 void handleNotFound(AsyncWebServerRequest *request)
 {
-  DBUG("NOT_FOUND: ");
-  dumpRequest(request);
-
   if(wifi_mode_is_ap_only()) {
-    // Redirect to the home page in AP mode (for the captive portal)
     AsyncResponseStream *response = request->beginResponseStream(String(CONTENT_TYPE_HTML));
-
     String url = F("http://");
     url += ipaddress;
-
     String s = F("<html><body><a href=\"");
     s += url;
     s += F("\">OpenEVSE</a></body></html>");
-
     response->setCode(301);
     response->addHeader(F("Location"), url);
     response->print(s);
@@ -890,81 +703,40 @@ void handleNotFound(AsyncWebServerRequest *request)
 void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
 {
   if(!index) {
-    DBUGF("BodyStart: %u", total);
     request->_tempObject = new String();
   }
   String *body = (String *)request->_tempObject;
-  DBUGF("%.*s", len, (const char*)data);
   body->concat((const char*)data, len);
-  if(index + len == total) {
-    DBUGF("BodyEnd: %u", total);
-  }
 }
 
 void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
   if(type == WS_EVT_CONNECT) {
-    DBUGF("ws[%s][%u] connect", server->url(), client->id());
     client->ping();
-  } else if(type == WS_EVT_DISCONNECT) {
-    DBUGF("ws[%s][%u] disconnect: %u", server->url(), client->id());
-  } else if(type == WS_EVT_ERROR) {
-    DBUGF("ws[%s][%u] error(%u): %s", server->url(), client->id(), *((uint16_t*)arg), (char*)data);
-  } else if(type == WS_EVT_PONG) {
-    DBUGF("ws[%s][%u] pong[%u]: %s", server->url(), client->id(), len, (len)?(char*)data:"");
-  } else if(type == WS_EVT_DATA) {
-    AwsFrameInfo * info = (AwsFrameInfo*)arg;
-    String msg = "";
-    if(info->final && info->index == 0 && info->len == len)
-    {
-      //the whole message is in a single frame and we got all of it's data
-      DBUGF("ws[%s][%u] %s-message[%u]: ", server->url(), client->id(), (info->opcode == WS_TEXT)?"text":"binary", len);
-    } else {
-      // TODO: handle messages that are comprised of multiple frames or the frame is split into multiple packets
-    }
   }
 }
 
 void
 web_server_setup() {
-//  SPIFFS.begin(); // mount the fs
-
-  // Setup the static files
-//  server.serveStatic("/", SPIFFS, "/")
-//    .setDefaultFile("index.html");
-
-  // Add the Web Socket server
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
   server.addHandler(&staticFile);
 
-  // Start server & server root html /
-  //server.on("/", handleHome);
-
-  // Handle status updates
   server.on("/status", handleStatus);
   server.on("/config", HTTP_GET, handleConfigGet);
   server.on("/config", HTTP_POST, handleConfigPost, NULL, handleBody);
-#ifdef ENABLE_LEGACY_API
-  server.on("/rapiupdate", handleUpdate);
-#endif
+  server.on("/time", handleTime);
 
-  // Handle HTTP web interface button presses
   server.on("/savenetwork", handleSaveNetwork);
-  server.on("/saveemoncms", handleSaveEmoncms);
   server.on("/savemqtt", handleSaveMqtt);
   server.on("/saveadmin", handleSaveAdmin);
   server.on("/saveadvanced", handleSaveAdvanced);
-  server.on("/saveohmkey", handleSaveOhmkey);
   server.on("/reset", handleRst);
   server.on("/restart", handleRestart);
   server.on("/rapi", handleRapi);
   server.on("/r", handleRapi);
   server.on("/scan", handleScan);
   server.on("/apoff", handleAPOff);
-  server.on("/divertmode", handleDivertMode);
-  server.on("/emoncms/describe", handleDescribe);
 
-  // Simple Firmware Update Form
   server.on("/update", HTTP_GET, handleUpdateGet);
   server.on("/update", HTTP_POST, handleUpdatePost, handleUpdateUpload);
 
@@ -972,47 +744,33 @@ web_server_setup() {
   server.onRequestBody(handleBody);
 
   server.begin();
-
   DEBUG.println("Server started");
 }
 
 void
 web_server_loop() {
-  Profile_Start(web_server_loop);
-
-  // Do we need to restart the WiFi?
   if(wifiRestartTime > 0 && millis() > wifiRestartTime) {
     wifiRestartTime = 0;
     wifi_restart();
-}
-
-  // Do we need to restart MQTT?
+  }
   if(mqttRestartTime > 0 && millis() > mqttRestartTime) {
     mqttRestartTime = 0;
     mqtt_restart();
   }
-
-  // Do we need to turn off the access point?
   if(apOffTime > 0 && millis() > apOffTime) {
     apOffTime = 0;
     wifi_turn_off_ap();
   }
-
-  // Do we need to restart the system?
   if(systemRestartTime > 0 && millis() > systemRestartTime) {
     systemRestartTime = 0;
     wifi_disconnect();
     ESP.restart();
   }
-
-  // Do we need to reboot the system?
   if(systemRebootTime > 0 && millis() > systemRebootTime) {
     systemRebootTime = 0;
     wifi_disconnect();
     ESP.reset();
   }
-
-  Profile_End(web_server_loop, 5);
 }
 
 void web_server_event(JsonDocument &event)

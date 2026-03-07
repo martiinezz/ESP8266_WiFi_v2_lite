@@ -1,218 +1,138 @@
 #include "emonesp.h"
 #include "mqtt.h"
 #include "app_config.h"
-#include "divert.h"
 #include "input.h"
 #include "espal.h"
-
 #include "openevse.h"
 
 #include <Arduino.h>
-#include <PubSubClient.h>             // MQTT https://github.com/knolleary/pubsubclient PlatformIO lib: 89
+#include <PubSubClient.h>
 #include <WiFiClient.h>
+#include <ESP8266WiFi.h>
 
-WiFiClient espClient;                 // Create client for MQTT
-PubSubClient mqttclient(espClient);   // Create client for MQTT
+WiFiClient espClient;
+PubSubClient mqttclient(espClient);
 
 static long nextMqttReconnectAttempt = 0;
 static unsigned long mqttRestartTime = 0;
 
-int clientTimeout = 0;
-int i = 0;
-
 #ifndef MQTT_CONNECT_TIMEOUT
 #define MQTT_CONNECT_TIMEOUT (5 * 1000)
-#endif // !MQTT_CONNECT_TIMEOUT
+#endif
 
 // -------------------------------------------------------------------
 // MQTT msg Received callback function:
-// Function to be called when msg is received on MQTT subscribed topic
-// Used to receive RAPI commands via MQTT
-// //e.g to set current to 13A: <base-topic>/rapi/$SC 13
 // -------------------------------------------------------------------
 void mqttmsg_callback(char *topic, byte * payload, unsigned int length) {
-
   String topic_string = String(topic);
   String payload_str = "";
-  // print received MQTT to debug
-
-  DBUGLN("MQTT received:");
-  DBUGF("Topic: %s", topic);
-
-  for (int i = 0; i < length; i++) {
+  for (unsigned int i = 0; i < length; i++) {
     payload_str += (char) payload[i];
   }
-  DEBUG.println("Payload: " + payload_str);
 
-  // If MQTT message is solar PV
-  if (topic_string == mqtt_solar){
-    solar = payload_str.toInt();
-    DBUGF("solar:%dW", solar);
-    divert_update_state();
+  DBUGF("MQTT Topic: %s, Payload: %s", topic, payload_str.c_str());
+
+  if (topic_string == mqtt_topic + "/cmd/start") {
+    rapiSender.sendCmd("$FE", [](int ret) { DBUGF("Start CMD: %d", ret); });
   }
-  else if (topic_string == mqtt_grid_ie){
-    grid_ie = payload_str.toInt();
-    DBUGF("grid:%dW", grid_ie);
-    divert_update_state();
+  else if (topic_string == mqtt_topic + "/cmd/pause") {
+    rapiSender.sendCmd("$FS", [](int ret) { DBUGF("Pause CMD: %d", ret); });
   }
-  else if (topic_string == mqtt_vrms){
-    voltage = payload_str.toFloat();
-    DBUGF("voltage: %.2f", voltage);
-    OpenEVSE.setVoltage(voltage, [](int ret) {
-      // Only gives better power calculations so not critical if this fails
+  else if (topic_string == mqtt_topic + "/cmd/current") {
+    String cmd = "$SC " + payload_str;
+    rapiSender.sendCmd(cmd, [](int ret) { DBUGF("Current CMD: %d", ret); });
+  }
+  else if (topic_string == mqtt_topic + "/rapi/in") {
+    rapiSender.sendCmd(payload_str, [](int ret) {
+      if (RAPI_RESPONSE_OK == ret || RAPI_RESPONSE_NK == ret) {
+        String out_topic = mqtt_topic + "/rapi/out";
+        mqttclient.publish(out_topic.c_str(), rapiSender.getResponse());
+      }
     });
   }
-  // If MQTT message to set divert mode is received
-  else if (topic_string == mqtt_topic + "/divertmode/set"){
-    byte newdivert = payload_str.toInt();
-    if ((newdivert==1) || (newdivert==2)){
-      divertmode_update(newdivert);
-    }
-  }
-  else
-  {
-    // If MQTT message is RAPI command
-    // Detect if MQTT message is a RAPI command e.g to set 13A <base-topic>/rapi/$SC 13
-    // Locate '$' character in the MQTT message to identify RAPI command
-    int rapi_character_index = topic_string.indexOf('$');
-    DBUGVAR(rapi_character_index);
-    if (rapi_character_index > 1) {
-      DBUGF("Processing as RAPI");
-      // Print RAPI command from mqtt-sub topic e.g $SC
-      // ASSUME RAPI COMMANDS ARE ALWAYS PREFIX BY $ AND TWO CHARACTERS LONG)
-      String cmd = String(topic + rapi_character_index);
-      if (payload[0] != 0); {     // If MQTT msg contains a payload e.g $SC 13. Not all rapi commands have a payload e.g. $GC
-        cmd += " ";
-        // print RAPI value received via MQTT serial
-        for (unsigned int i = 0; i < length; i++) {
-          cmd += (char)payload[i];
-        }
-      }
-
-      rapiSender.sendCmd(cmd, [](int ret)
-      {
-        if (RAPI_RESPONSE_OK == ret || RAPI_RESPONSE_NK == ret)
-        {
-          String rapiString = rapiSender.getResponse();
-          String mqtt_data = rapiString;
-          String mqtt_sub_topic = mqtt_topic + "/rapi/out";
-          mqttclient.publish(mqtt_sub_topic.c_str(), mqtt_data.c_str());
-        }
-      });
-    }
-  }
-} //end call back
+}
 
 // -------------------------------------------------------------------
 // MQTT Connect
 // -------------------------------------------------------------------
-boolean
-mqtt_connect() {
+boolean mqtt_connect() {
+  if (mqtt_server == "") return false;
+
   mqttclient.setServer(mqtt_server.c_str(), mqtt_port);
-  mqttclient.setCallback(mqttmsg_callback); //function to be called when mqtt msg is received on subscribed topic
-  DEBUG.print("MQTT Connecting to...");
-  DEBUG.println(mqtt_user.c_str());
+  mqttclient.setCallback(mqttmsg_callback);
+
   String strID = String(ESP.getChipId());
-  if (mqttclient.connect(strID.c_str(), mqtt_user.c_str(), mqtt_pass.c_str(),mqtt_topic.c_str(),1,0,(char*)"disconnected")) {  // Attempt to connect
+  if (mqttclient.connect(strID.c_str(), mqtt_user.c_str(), mqtt_pass.c_str(), (mqtt_topic + "/status/mqtt_connected").c_str(), 1, 1, "0")) {
     DEBUG.println("MQTT connected");
-    mqttclient.publish(mqtt_topic.c_str(), "connected"); // Once connected, publish an announcement..
-    String mqtt_sub_topic = mqtt_topic + "/rapi/in/#";      // MQTT Topic to subscribe to receive RAPI commands via MQTT
-    //e.g to set current to 13A: <base-topic>/rapi/in/$SC 13
-    mqttclient.subscribe(mqtt_sub_topic.c_str());
-    // subscribe to solar PV / grid_ie MQTT feeds
-    if(config_divert_enabled())
-    {
-      if (mqtt_solar!="") {
-        mqttclient.subscribe(mqtt_solar.c_str());
-      }
-      if (mqtt_grid_ie!="") {
-        mqttclient.subscribe(mqtt_grid_ie.c_str());
-      }
-    }
-    if (mqtt_vrms!="") {
-      mqttclient.subscribe(mqtt_vrms.c_str());
-    }
+    mqttclient.publish((mqtt_topic + "/status/mqtt_connected").c_str(), "1", true);
 
-    mqtt_sub_topic = mqtt_topic + "/divertmode/set";      // MQTT Topic to change divert mode
-    mqttclient.subscribe(mqtt_sub_topic.c_str());
+    mqttclient.subscribe((mqtt_topic + "/cmd/start").c_str());
+    mqttclient.subscribe((mqtt_topic + "/cmd/pause").c_str());
+    mqttclient.subscribe((mqtt_topic + "/cmd/current").c_str());
+    mqttclient.subscribe((mqtt_topic + "/rapi/in").c_str());
 
-  } else {
-    DEBUG.print("MQTT failed: ");
-    DEBUG.println(mqttclient.state());
-    return (0);
+    return true;
   }
-  return (1);
+  return false;
 }
-
-
 
 // -------------------------------------------------------------------
 // Publish status to MQTT
 // -------------------------------------------------------------------
-void
-mqtt_publish(JsonDocument &data) {
-  Profile_Start(mqtt_publish);
+void mqtt_publish(JsonDocument &data) {
+  if(!config_mqtt_enabled() || !mqttclient.connected()) return;
 
-  if(!config_mqtt_enabled() || !mqttclient.connected()) {
-    return;
+  String base = mqtt_topic + "/status/";
+
+  // Specific status topics
+  if (data.containsKey("state")) {
+    mqttclient.publish((base + "state").c_str(), data["state"].as<String>().c_str(), true);
+  }
+  if (data.containsKey("amp")) {
+    mqttclient.publish((base + "amp").c_str(), data["amp"].as<String>().c_str(), true);
+  }
+  if (data.containsKey("pilot")) {
+    mqttclient.publish((base + "pilot").c_str(), data["pilot"].as<String>().c_str(), true);
+  }
+  if (data.containsKey("wh")) {
+    mqttclient.publish((base + "wh").c_str(), data["wh"].as<String>().c_str(), true);
+  }
+  if (data.containsKey("srssi")) {
+    mqttclient.publish((base + "rssi").c_str(), data["srssi"].as<String>().c_str(), true);
   }
 
-  JsonObject root = data.as<JsonObject>();
-  for (JsonPair kv : root) {
-    String topic = mqtt_topic + "/";
-    topic += kv.key().c_str();
-    String val = kv.value().as<String>();
-    mqttclient.publish(topic.c_str(), val.c_str());
-  }
-
-  Profile_End(mqtt_publish, 5);
+  // Uptime and others
+  mqttclient.publish((base + "uptime").c_str(), String(millis() / 1000).c_str(), true);
+  mqttclient.publish((base + "wifi_connected").c_str(), String(WiFi.status() == WL_CONNECTED ? 1 : 0).c_str(), true);
 }
 
 // -------------------------------------------------------------------
 // MQTT state management
-//
-// Call every time around loop() if connected to the WiFi
 // -------------------------------------------------------------------
-void
-mqtt_loop() {
-  Profile_Start(mqtt_loop);
-
-  // Do we need to restart MQTT?
-  if(mqttRestartTime > 0 && millis() > mqttRestartTime) 
-  {
+void mqtt_loop() {
+  if(mqttRestartTime > 0 && millis() > mqttRestartTime) {
     mqttRestartTime = 0;
-    if (mqttclient.connected()) {
-      DBUGF("Disconnecting MQTT");
-      mqttclient.disconnect();
-    }
+    if (mqttclient.connected()) mqttclient.disconnect();
     nextMqttReconnectAttempt = 0;
   }
 
-  if(config_mqtt_enabled())
-  {
+  if(config_mqtt_enabled()) {
     if (!mqttclient.connected()) {
       long now = millis();
-      // try and reconnect every x seconds
       if (now > nextMqttReconnectAttempt) {
         nextMqttReconnectAttempt = now + MQTT_CONNECT_TIMEOUT;
-        mqtt_connect(); // Attempt to reconnect
+        mqtt_connect();
       }
     } else {
-      // if MQTT connected
       mqttclient.loop();
     }
   }
-
-  Profile_End(mqtt_loop, 5);
 }
 
-void
-mqtt_restart() {
-  // If connected disconnect MQTT to trigger re-connect with new details
+void mqtt_restart() {
   mqttRestartTime = millis();
 }
 
-boolean
-mqtt_connected() {
+boolean mqtt_connected() {
   return mqttclient.connected();
 }
